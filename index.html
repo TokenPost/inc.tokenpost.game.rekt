@@ -837,10 +837,6 @@ header{position:relative;z-index:5;display:flex;align-items:center;gap:9px;paddi
 .raincloud.dark::before,.raincloud.dark::after{background:#8c99b8}
 /* never touch `animation` here: re-declaring it restarts the drift from the left edge,
    and a transform keyframe would fight the one moving the cloud. Flash instead. */
-.raincloud.dark{animation-name:propdrift,thunder;animation-duration:var(--dur),.4s;
-  animation-timing-function:linear,ease-out;animation-iteration-count:1,3;
-  animation-fill-mode:forwards,none}
-@keyframes thunder{0%,100%{filter:none}30%{filter:brightness(1.9)}}
 .drop{position:absolute;top:46px;width:6px;height:17px;border-radius:0 0 4px 4px;
   background:#7cb6e8;border:2px solid #2f5f92;animation:rainfall .8s linear infinite}
 @keyframes rainfall{from{transform:translateY(0);opacity:0}
@@ -2001,7 +1997,7 @@ function spawnProp() {
   p.style.setProperty('--dist', dist.toFixed(0) + 'px')
   p.style.setProperty('--shift', '0px')
   p.addEventListener('pointerdown', e => { e.stopPropagation(); burstRain(p) })
-  p.addEventListener('animationend', () => p.remove())
+  p.addEventListener('animationend', e => { if (e.animationName === 'propdrift') p.remove() })
   $('#props').appendChild(p)
 }
 
@@ -2156,6 +2152,12 @@ function burstRain(cloud) {
   if (cloud.classList.contains('dark')) return
   cloud.classList.add('dark')
   Sound.play('rain')
+  // flashed from JS, not a keyframe: a second animation-name on .dark restarted the
+  // drift, and its animationend deleted the cloud one second into the downpour
+  for (let i = 0; i < 3; i++) {
+    setTimeout(() => { cloud.style.filter = 'brightness(1.9)' }, i * 400)
+    setTimeout(() => { cloud.style.filter = '' }, i * 400 + 120)
+  }
   const fall = (AR.ground - parseFloat(cloud.style.top) - 46).toFixed(0) + 'px'
   for (let i = 0; i < 16; i++) {
     const d = el('i', 'drop')
@@ -3274,7 +3276,9 @@ function loop(t) {
     }
     if (b.id === 'hype') {
       const idle = (performance.now() - G.lastHit) / 1000
-      if (idle > .5) { G.hype = clamp(G.hype + 26 * dt, 0, 100); paintHype() }
+      // 26/s past .5s meant 4.3s of standing still to fill it — nobody idles that long,
+      // so the meter topped out around 2% and the mechanic never fired. ~2s now.
+      if (idle > .4) { G.hype = clamp(G.hype + 58 * dt, 0, 100); paintHype() }
     }
     if (b.id === 'architect' && G.gas > 0) { G.gas = clamp(G.gas - 26 * dt, 0, 100); paintGas() }
     if (b.id === 'algorithm') {
