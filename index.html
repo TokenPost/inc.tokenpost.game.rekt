@@ -1042,8 +1042,22 @@ footer.locked .wp{opacity:.55}
   </section>
 </div>
 
+<script src="https://tokenapps-nu.vercel.app/sdk/v1.js"></script>
 <script>
 'use strict'
+/* ================= TOKENAPPS =================
+   Platform bridge (points, cloud save) when embedded in TokenApps, and a
+   storage shim for its sandboxed iframe: an opaque origin has NO localStorage
+   (property access throws), which used to kill this script at the first
+   unguarded read. Outside TokenApps everything behaves exactly as before. */
+const store = (() => {
+  try { const s = window.localStorage; s.getItem('rekt.probe'); return s }
+  catch (_) {
+    const m = new Map()
+    return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)) }
+  }
+})()
+const TA = () => window.TokenApps || null
 const $ = s => document.querySelector(s)
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e }
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v
@@ -1186,7 +1200,7 @@ const SWING_LOCK = 800   // ms you are committed after any swing, capped so the 
    Deliberately NOT translated: the punch words (REKT, HODL, FUD, WHALE ALERT,
    DEATH SPIRAL...). They are the game's identity and Korean crypto users say them
    in English anyway — §13 flavour, not information. */
-let lang = localStorage.getItem('rekt.lang') || ((navigator.language || '').startsWith('ko') ? 'ko' : 'en')
+let lang = store.getItem('rekt.lang') || ((navigator.language || '').startsWith('ko') ? 'ko' : 'en')
 const UI = {
   tag:      { en:'BEAT THE CRYPTO BOSSES', ko:'크립토 보스를 두들겨 패라' },
   hint:     { en:'PICK A BOSS · CHASE · HIT', ko:'보스 선택 · 추격 · 타격' },
@@ -1353,10 +1367,10 @@ Voice.init()
 
 /* ================= AUDIO ================= */
 const Sound = {
-  on: localStorage.getItem('rekt.sound') !== 'off',
+  on: store.getItem('rekt.sound') !== 'off',
   ctx: null,
   boot() { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); if (this.ctx.state === 'suspended') this.ctx.resume() },
-  toggle() { this.on = !this.on; localStorage.setItem('rekt.sound', this.on ? 'on' : 'off'); paintSound()
+  toggle() { this.on = !this.on; store.setItem('rekt.sound', this.on ? 'on' : 'off'); paintSound()
     if (this.on) { this.boot(); this.play('hit') } else if (typeof Voice !== 'undefined') Voice.stop() },
   tone(type, f0, f1, dur, vol, delay) {
     const c = this.ctx, t = c.currentTime + (delay || 0), o = c.createOscillator(), g = c.createGain()
@@ -1464,7 +1478,7 @@ const Save = {
   coins: 0, owned: FREE_WEAPONS.slice(), stages: ['arena'], stage: 'arena',
   load() {
     try {
-      const raw = JSON.parse(localStorage.getItem('rekt.save') || '{}')
+      const raw = JSON.parse(store.getItem('rekt.save') || '{}')
       this.coins = Math.max(0, raw.coins | 0)
       const own = Array.isArray(raw.owned) ? raw.owned : []
       this.owned = [...new Set([...FREE_WEAPONS, ...own.filter(id => PRICES[id])])]
@@ -1474,10 +1488,10 @@ const Save = {
     } catch (_) { /* corrupt save: start clean rather than crash into a blank screen */ }
   },
   save() {
-    try {
-      localStorage.setItem('rekt.save', JSON.stringify(
-        { coins: this.coins, owned: this.owned, stages: this.stages, stage: this.stage }))
-    } catch (_) {}
+    const data = { coins: this.coins, owned: this.owned, stages: this.stages, stage: this.stage }
+    try { store.setItem('rekt.save', JSON.stringify(data)) } catch (_) {}
+    // Cross-device copy on the player's TokenApps account. Guests skip.
+    const ta = TA(); if (ta && ta.canSave()) ta.save(data).catch(() => {})
   },
   has(id) { return this.owned.includes(id) },
   hasStage(id) { return this.stages.includes(id) },
@@ -2586,7 +2600,7 @@ function applyLang() {
 }
 function toggleLang() {
   lang = ko() ? 'en' : 'ko'
-  localStorage.setItem('rekt.lang', lang)
+  store.setItem('rekt.lang', lang)
   Voice.stop(); applyLang()
 }
 const W = id => WEAPONS.find(w => w.id === id)
@@ -3149,6 +3163,8 @@ function die() {
     return
   }
   G.over = true
+  // A finished run, reported to the platform — the server decides the points.
+  { const ta = TA(); if (ta) ta.track('session_complete') }
   clearCoins()
   G.downline.forEach(f => f.node.remove()); G.downline = []
   const s = $('#shieldfx'); if (s) s.remove()
@@ -3368,6 +3384,30 @@ function selfTest() {
   console.log('%cREKT self-check ok', 'color:#12b47a')
 }
 if (location.hash === '#test') selfTest()
+
+/* ================= TOKENAPPS HANDSHAKE =================
+   Runs only when the platform SDK loaded (i.e. inside TokenApps or anywhere
+   the script tag resolves). Adopts the account save when one exists so coins
+   and unlocks follow the player across devices; otherwise pushes the local
+   save up once. Everything is fire-and-forget — the game never waits on it. */
+{
+  const ta = TA()
+  if (ta) {
+    ta.on('session', () => {
+      if (!ta.canSave()) return
+      ta.load().then(raw => {
+        if (raw && typeof raw === 'object' && ('coins' in raw)) {
+          store.setItem('rekt.save', JSON.stringify(raw))
+          Save.load()
+          applyLang()            // rebuilds roster, weapons, stages, purse
+        } else {
+          Save.save()            // first sign-in: seed the account slot
+        }
+      }).catch(() => {})
+    })
+    ta.ready()
+  }
+}
 </script>
 </body>
 </html>
